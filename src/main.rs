@@ -95,7 +95,7 @@ async fn run_server(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let addr = "192.168.0.102:8080";
+    let addr = "0.0.0.0:3000";
     println!("Listening on {}", addr);
 
     run_server(addr).await?;
