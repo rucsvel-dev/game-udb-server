@@ -12,6 +12,7 @@ struct Player {
     y: f32,
     vx: f32,
     vy: f32,
+    pub timestamp: f32,
 }
 
 #[derive(Debug)]
@@ -42,6 +43,7 @@ impl Room {
             existing_player.y = player.y;
             existing_player.vx = player.vx;
             existing_player.vy = player.vy;
+            existing_player.timestamp = player.timestamp;
         }
     }
 }
