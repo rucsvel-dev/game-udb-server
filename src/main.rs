@@ -2,17 +2,24 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use tokio::net::UdpSocket;
+use tokio::time::{self, Duration};
 // use tokio::sync::mpsc::Sender;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Player {
-    // address: String,
+    address: String,
     id: String,
     x: f32,
     y: f32,
     vx: f32,
     vy: f32,
-    pub timestamp: f32,
+    timestamp: f32,
+}
+
+impl Player {
+    fn set_address(&mut self, address: String) {
+        self.address = address;
+    }
 }
 
 #[derive(Debug)]
@@ -48,46 +55,66 @@ impl Room {
     }
 }
 
-async fn handle_message(socket: &UdpSocket, remote: SocketAddr, buf: &[u8], rooms: &mut Vec<Room>) -> Result<(), Box<dyn std::error::Error>> {
-    // println!("here rooms: {:?}", rooms.iter().map(|room| room.id.to_owned()).collect::<Vec<String>>());
-    let player: Player = match serde_json::from_slice(buf) {
+async fn handle_message(buf: &[u8], rooms: &mut Vec<Room>, remote: SocketAddr,) -> Result<Player, Box<dyn std::error::Error>> {
+    let mut player: Player = match serde_json::from_slice(buf) {
         Ok(player) => player,
         Err(err) => {
             println!("error parsing json: {:?}", err);
-            return Ok(())
+            return Err(err.into())
         },
     };
+    player.set_address(remote.to_string());
+
     println!("player: {:?}", player);
-    let room = match rooms.iter_mut().find(|r| r.players.len() <= 5) {
-        Some(room) => room,
-        None => {
-            let room_id = player.id.to_owned();
-            let mut new_room = Room::new(room_id);
-            new_room.add_player(player);
-            rooms.push(new_room);
-            return Ok(());
-        }
-    };
-
-    room.add_player(player);
-
-    let response = serde_json::to_string(&room.players)?;
-    // println!("Sending response to {}: {}", remote, response);
-    socket.send_to(response.as_bytes(), &remote).await?;
-    
-    Ok(())
+    Ok(player)
 }
 
+fn update_room_state(room: &mut Room) {
+    for player in room.players.values_mut() {
+        player.x += player.vx;
+        player.y += player.vy;
+    }
+}
+
+async fn send_room_state(socket: &UdpSocket, room: &Room) -> Result<(), Box<dyn std::error::Error>> {
+    for player in room.players.values() {
+        let message = format!("Player {} is now at ({}, {})", player.id, player.x, player.y);
+        println!("{}", message);
+
+        socket.send_to(message.as_bytes(), &player.address).await?;
+    }
+
+    Ok(())
+}
 
 async fn run_server(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
     let socket = UdpSocket::bind(addr).await?;
     let mut buf = vec![0u8; 1024];
     let mut rooms = Vec::new();
-    println!("anything");
+    let mut interval = time::interval(Duration::from_millis(50)); // 20 ticks per second
+
     loop {
-        let (n, remote) = socket.recv_from(&mut buf).await?;
-        if let Err(e) = handle_message(&socket, remote, &buf[..n], &mut rooms).await {
-            println!("Error handling message: {}", e);
+        interval.tick().await;
+
+        while let Ok((n, remote)) = socket.recv_from(&mut buf).await {
+            if let Ok(player) = handle_message(&buf[..n], &mut rooms, remote).await {
+                let room = match rooms.iter_mut().find(|r| r.players.len() <= 5) {
+                    Some(room) => room,
+                    None => {
+                        let room_id = player.id.to_owned();
+                        let mut new_room = Room::new(room_id);
+                        new_room.add_player(player);
+                        rooms.push(new_room);
+                        continue;
+                    }
+                };
+                room.add_player(player);
+            }
+        }
+
+        for room in &mut rooms {
+            update_room_state(room);
+            send_room_state(&socket, room).await?;
         }
     }
 }
